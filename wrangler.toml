@@ -1,5 +1,5 @@
 name = "proxy"
-main = "index.js"
+main = "m3u8proxy(cf_worker).js"
 compatibility_date = "2024-12-18"
 
 # এখানে শুধুমাত্র ডেভেলপমেন্টের জন্য ডামি ভ্যালু রাখুন। 
