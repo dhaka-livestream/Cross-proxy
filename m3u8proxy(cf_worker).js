@@ -1,4 +1,3 @@
-
 addEventListener("fetch", (event) => {
   event.respondWith(handleRequest(event.request));
 });
@@ -76,12 +75,14 @@ async function handleM3U8Proxy(request) {
       }
     });
 
+    // M3U8 প্লেলিস্ট ১০ সেকেন্ড ক্যাশে থাকবে (প্লেয়ারকে বারবার ফেচ করতে দেয় না)
     return new Response(newLines.join("\n"), {
       headers: {
         "Content-Type": "application/vnd.apple.mpegurl",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": "*",
         "Access-Control-Allow-Methods": "*",
+        "Cache-Control": "public, max-age=10", // নতুন অংশ
       },
     });
   } catch (error) {
@@ -116,14 +117,16 @@ async function handleTsProxy(request) {
       return new Response("Failed to fetch segment", { status: response.status });
     }
 
+    // 🔥 সমাধান: ভিডিও অংশ (`.ts` ফাইল) ৩০ দিন ক্যাশে রাখার নির্দেশ
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.set("Content-Type", "video/mp2t");
+    responseHeaders.set("Access-Control-Allow-Origin", "*");
+    responseHeaders.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    responseHeaders.set("Cache-Control", "public, max-age=2592000, stale-while-revalidate=86400"); // ৩০ দিন ক্যাশে
+
     return new Response(response.body, {
       status: response.status,
-      headers: {
-        "Content-Type": "video/mp2t",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Allow-Methods": "*",
-      },
+      headers: responseHeaders,
     });
   } catch (error) {
     return new Response(error.message, { status: 500 });
