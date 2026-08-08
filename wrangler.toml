@@ -1,5 +1,5 @@
 # ওয়ার্কারের নাম (যেকোনো নাম দিন)
-name = "proxy-worker"
+name = "proxy"
 
 # মূল ফাইল (যে ফাইলে এই কোডটি আছে)
 main = "worker.js"
