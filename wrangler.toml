@@ -1,3 +1,3 @@
 name = "proxy"
-main = "m3u8proxy(cf_worker).js"   # এই লাইনটি ঠিক করুন
+main = "worker.js"   # এই লাইনটি ঠিক করুন
 compatibility_date = "2024-12-18"
