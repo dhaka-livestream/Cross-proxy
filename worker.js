@@ -1,132 +1,68 @@
-addEventListener("fetch", (event) => {
-  event.respondWith(handleRequest(event.request));
-});
+export default {
+  async fetch(request, env, ctx) {
+    const { searchParams } = new URL(request.url);
+    const targetUrl = searchParams.get("url");
 
-async function handleRequest(request) {
-  const url = new URL(request.url);
-  if (url.pathname === "/m3u8-proxy") {
-    return handleM3U8Proxy(request);
-  } else if (url.pathname === "/ts-proxy") {
-    return handleTsProxy(request);
-  }
-  return new Response("Not Found", { status: 404 });
-}
-
-const options = {
-  originBlacklist: [],
-  originWhitelist: ["*"],
-};
-
-const isOriginAllowed = (origin, options) => {
-  if (options.originWhitelist.includes("*")) {
-    return true;
-  }
-  if (options.originWhitelist.length && !options.originWhitelist.includes(origin)) {
-    return false;
-  }
-  if (options.originBlacklist.length && options.originBlacklist.includes(origin)) {
-    return false;
-  }
-  return true;
-};
-
-async function handleM3U8Proxy(request) {
-  const { searchParams } = new URL(request.url);
-  const targetUrl = searchParams.get("url");
-  const headers = JSON.parse(searchParams.get("headers") || "{}");
-  const origin = request.headers.get("Origin") || "";
-
-  if (!isOriginAllowed(origin, options)) {
-    return new Response(`The origin "${origin}" is not allowed.`, { status: 403 });
-  }
-
-  if (!targetUrl) {
-    return new Response("URL is required", { status: 400 });
-  }
-
-  try {
-    const response = await fetch(targetUrl, { headers });
-    if (!response.ok) {
-      return new Response("Failed to fetch the m3u8 file", { status: response.status });
+    if (!targetUrl) {
+      return new Response("❌ Missing ?url= parameter", { status: 400 });
     }
 
-    let m3u8 = await response.text();
-    m3u8 = m3u8
-      .split("\n")
-      .filter((line) => !line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO"))
-      .join("\n");
+    try {
+      // কাস্টম হেডার কনফিগার (প্রয়োজন অনুযায়ী ডোমেইন যোগ করুন)
+      const rules = {
+        // "example.com": {
+        //   Origin: "https://example.com",
+        //   Referer: "https://example.com/",
+        // },
+      };
 
-    const lines = m3u8.split("\n");
-    const newLines = [];
+      // ডিফল্ট ইউজার-এজেন্ট
+      let customHeaders = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      };
 
-    lines.forEach((line) => {
-      if (line.startsWith("#")) {
-        if (line.startsWith("#EXT-X-KEY:")) {
-          const regex = /https?:\/\/[^\""\s]+/g;
-          const keyUrl = regex.exec(line)?.[0] ?? "";
-          const newUrl = `/ts-proxy?url=${encodeURIComponent(keyUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-          newLines.push(line.replace(keyUrl, newUrl));
-        } else {
-          newLines.push(line);
+      // হোস্ট মিলিয়ে হেডার যোগ করুন
+      const host = new URL(targetUrl).hostname;
+      for (const ruleHost in rules) {
+        if (host.includes(ruleHost)) {
+          Object.assign(customHeaders, rules[ruleHost]);
+          break;
         }
-      } else {
-        const uri = new URL(line, targetUrl);
-        newLines.push(`/ts-proxy?url=${encodeURIComponent(uri.href)}&headers=${encodeURIComponent(JSON.stringify(headers))}`);
       }
-    });
 
-    return new Response(newLines.join("\n"), {
-      headers: {
-        "Content-Type": "application/vnd.apple.mpegurl",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Allow-Methods": "*",
-        "Cache-Control": "public, max-age=10",
-      },
-    });
-  } catch (error) {
-    return new Response(error.message, { status: 500 });
-  }
-}
+      // আসল M3U8 ফাইল ফেচ করুন
+      const resp = await fetch(targetUrl, { headers: customHeaders });
 
-async function handleTsProxy(request) {
-  const { searchParams } = new URL(request.url);
-  const targetUrl = searchParams.get("url");
-  const headers = JSON.parse(searchParams.get("headers") || "{}");
-  const origin = request.headers.get("Origin") || "";
+      if (!resp.ok) {
+        return new Response(`Failed to fetch: ${resp.status} ${resp.statusText}`, {
+          status: resp.status,
+        });
+      }
 
-  if (!isOriginAllowed(origin, options)) {
-    return new Response(`The origin "${origin}" is not allowed.`, { status: 403 });
-  }
+      let text = await resp.text();
+      const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf("/") + 1);
 
-  if (!targetUrl) {
-    return new Response("URL is required", { status: 400 });
-  }
+      // রিলেটিভ পাথকে অ্যাবসলিউট URL-এ রূপান্তর
+      const rewritten = text
+        .split("\n")
+        .map((line) => {
+          line = line.trim();
+          if (!line || line.startsWith("#")) return line;
+          if (line.startsWith("http://") || line.startsWith("https://")) return line;
+          return encodeURI(baseUrl + line);
+        })
+        .join("\n");
 
-  try {
-    const response = await fetch(targetUrl, {
-      method: request.method,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.132 Safari/537.36",
-        ...headers,
-      },
-    });
-
-    if (!response.ok) {
-      return new Response("Failed to fetch segment", { status: response.status });
+      return new Response(rewritten, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/vnd.apple.mpegurl",
+          "Cache-Control": "no-store", // বাফারিং এড়াতে
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    } catch (err) {
+      return new Response("Worker error: " + err.message, { status: 500 });
     }
-
-    const responseHeaders = new Headers(response.headers);
-    responseHeaders.set("Content-Type", "video/mp2t");
-    responseHeaders.set("Access-Control-Allow-Origin", "*");
-    responseHeaders.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-    responseHeaders.set("Cache-Control", "public, max-age=2592000, stale-while-revalidate=86400");
-
-    return new Response(response.body, {
-      status: response.status,
-      headers: responseHeaders,
-    });
-  } catch (error) {
-    return new Response(error.message, { status: 500 });
-  }
-}
+  },
+};
