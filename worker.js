@@ -1,134 +1,135 @@
-// ============================================================
-//  অ্যাডভান্সড M3U8 প্রোক্সি - রিডাইরেক্ট ও হেডার সাপোর্ট সহ
-// ============================================================
+addEventListener("fetch", (event) => {
+  event.respondWith(handleRequest(event.request));
+});
 
-// অনুমোদিত ডোমেইন (যে ডোমেইনগুলো প্রক্সি করা যাবে)
-const ALLOWED_DOMAINS = [
-    'line.umetop.pro',
-    '185.243.7.47',
-    'bldcmprod-cdn.toffeelive.com',
-    'toffeelive.com'
-];
+async function handleRequest(request) {
+  const url = new URL(request.url);
+  if (url.pathname === "/m3u8-proxy") {
+    return handleM3U8Proxy(request);
+  } else if (url.pathname === "/ts-proxy") {
+    return handleTsProxy(request);
+  }
+  return new Response("Not Found", { status: 404 });
+}
 
-// ডিফল্ট হেডার (ব্রাউজার ইমিটেট করার জন্য)
-const DEFAULT_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Upgrade-Insecure-Requests': '1'
+const options = {
+  originBlacklist: [],
+  originWhitelist: ["*"],
 };
 
-export default {
-    async fetch(request, env, ctx) {
-        const url = new URL(request.url);
-        const targetUrl = url.searchParams.get('url');
+const isOriginAllowed = (origin, options) => {
+  if (options.originWhitelist.includes("*")) {
+    return true;
+  }
+  if (options.originWhitelist.length && !options.originWhitelist.includes(origin)) {
+    return false;
+  }
+  if (options.originBlacklist.length && options.originBlacklist.includes(origin)) {
+    return false;
+  }
+  return true;
+};
 
-        if (!targetUrl) {
-            return new Response('❌ "url" প্যারামিটার দিন। যেমন: ?url=https://example.com/file.m3u8', {
-                status: 400,
-                headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' }
-            });
-        }
+async function handleM3U8Proxy(request) {
+  const { searchParams } = new URL(request.url);
+  const targetUrl = searchParams.get("url");
+  const headers = JSON.parse(searchParams.get("headers") || "{}");
+  const origin = request.headers.get("Origin") || "";
 
-        // ১. ডোমেইন চেক (নিরাপত্তা)
-        try {
-            const target = new URL(targetUrl);
-            const isAllowed = ALLOWED_DOMAINS.some(domain =>
-                target.hostname === domain || target.hostname.endsWith(`.${domain}`)
-            );
-            if (!isAllowed) {
-                return new Response('⛔ এই ডোমেইন প্রক্সি করার অনুমতি নেই', {
-                    status: 403,
-                    headers: { 'Access-Control-Allow-Origin': '*' }
-                });
-            }
-        } catch (e) {
-            return new Response('❌ ভুল URL', { status: 400 });
-        }
+  if (!isOriginAllowed(origin, options)) {
+    return new Response(`The origin "${origin}" is not allowed.`, { status: 403 });
+  }
 
-        // ২. হেডার তৈরি করুন
-        const headers = new Headers(DEFAULT_HEADERS);
-        // ইউজারের কুকি বা হেডার ফরওয়ার্ড করুন (যদি থাকে)
-        if (request.headers.has('Cookie')) {
-            headers.set('Cookie', request.headers.get('Cookie'));
-        }
-        if (request.headers.has('Referer')) {
-            headers.set('Referer', request.headers.get('Referer'));
-        }
+  if (!targetUrl) {
+    return new Response("URL is required", { status: 400 });
+  }
 
-        try {
-            // ৩. প্রথম রিকোয়েস্ট পাঠান (রিডাইরেক্ট ফলো সহ)
-            const response = await fetch(targetUrl, {
-                method: 'GET',
-                headers: headers,
-                redirect: 'follow'    // ← এটাই ম্যাজিক! PHP-র রিডাইরেক্ট ফলো করবে
-            });
-
-            // ৪. ফাইনাল URL বের করুন (রিডাইরেক্টের পরের URL)
-            const finalUrl = response.url;
-
-            // ৫. কন্টেন্ট টাইপ চেক করুন
-            const contentType = response.headers.get('content-type') || '';
-            const isM3u8 = contentType.includes('mpegurl') ||
-                           contentType.includes('vnd.apple.mpegurl') ||
-                           finalUrl.includes('.m3u8');
-
-            // ৬. যদি M3U8 হয়, তাহলে রিরাইট করুন
-            if (isM3u8) {
-                const content = await response.text();
-                const baseUrl = finalUrl.substring(0, finalUrl.lastIndexOf('/') + 1);
-                const rewritten = rewriteM3U8(content, baseUrl, url.origin);
-
-                return new Response(rewritten, {
-                    status: 200,
-                    headers: {
-                        'Content-Type': 'application/vnd.apple.mpegurl',
-                        'Access-Control-Allow-Origin': '*',
-                        'Cache-Control': 'no-cache, no-store, must-revalidate'
-                    }
-                });
-            }
-
-            // ৭. যদি M3U8 না হয় (যেমন PHP রেস্পন্স), তবুও রিটার্ন করুন
-            return new Response(response.body, {
-                status: response.status,
-                headers: {
-                    ...Object.fromEntries(response.headers),
-                    'Access-Control-Allow-Origin': '*'
-                }
-            });
-
-        } catch (error) {
-            return new Response(`🔥 প্রোক্সি ব্যর্থ: ${error.message}`, {
-                status: 502,
-                headers: { 'Access-Control-Allow-Origin': '*' }
-            });
-        }
+  try {
+    const response = await fetch(targetUrl, { headers });
+    if (!response.ok) {
+      return new Response("Failed to fetch the m3u8 file", { status: response.status });
     }
-};
 
-// M3U8 ফাইলের সব লিংক রিরাইট করুন
-function rewriteM3U8(content, baseUrl, proxyOrigin) {
-    const lines = content.split('\n');
-    const result = [];
-    for (let line of lines) {
-        const trimmed = line.trim();
-        if (trimmed === '' || trimmed.startsWith('#')) {
-            result.push(line);
+    let m3u8 = await response.text();
+    // অডিও ট্র্যাক বাদ দিন (ঐচ্ছিক)
+    m3u8 = m3u8
+      .split("\n")
+      .filter((line) => !line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO"))
+      .join("\n");
+
+    const lines = m3u8.split("\n");
+    const newLines = [];
+
+    lines.forEach((line) => {
+      if (line.startsWith("#")) {
+        // এনক্রিপশন কী থাকলে সেটিও প্রোক্সি করুন
+        if (line.startsWith("#EXT-X-KEY:")) {
+          const regex = /https?:\/\/[^\""\s]+/g;
+          const keyUrl = regex.exec(line)?.[0] ?? "";
+          const newUrl = `/ts-proxy?url=${encodeURIComponent(keyUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+          newLines.push(line.replace(keyUrl, newUrl));
         } else {
-            try {
-                const absoluteUrl = new URL(trimmed, baseUrl).href;
-                const proxied = `${proxyOrigin}?url=${encodeURIComponent(absoluteUrl)}`;
-                result.push(proxied);
-            } catch {
-                result.push(line);
-            }
+          newLines.push(line);
         }
+      } else {
+        // প্রতিটি TS সেগমেন্টকে প্রোক্সি লিংকে রূপান্তর
+        const uri = new URL(line, targetUrl);
+        newLines.push(`/ts-proxy?url=${encodeURIComponent(uri.href)}&headers=${encodeURIComponent(JSON.stringify(headers))}`);
+      }
+    });
+
+    return new Response(newLines.join("\n"), {
+      headers: {
+        "Content-Type": "application/vnd.apple.mpegurl",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Allow-Methods": "*",
+        "Cache-Control": "public, max-age=10", // হালকা ক্যাশিং
+      },
+    });
+  } catch (error) {
+    return new Response(error.message, { status: 500 });
+  }
+}
+
+async function handleTsProxy(request) {
+  const { searchParams } = new URL(request.url);
+  const targetUrl = searchParams.get("url");
+  const headers = JSON.parse(searchParams.get("headers") || "{}");
+  const origin = request.headers.get("Origin") || "";
+
+  if (!isOriginAllowed(origin, options)) {
+    return new Response(`The origin "${origin}" is not allowed.`, { status: 403 });
+  }
+
+  if (!targetUrl) {
+    return new Response("URL is required", { status: 400 });
+  }
+
+  try {
+    const response = await fetch(targetUrl, {
+      method: request.method,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.132 Safari/537.36",
+        ...headers,
+      },
+    });
+
+    if (!response.ok) {
+      return new Response("Failed to fetch segment", { status: response.status });
     }
-    return result.join('\n');
+
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.set("Content-Type", "video/mp2t");
+    responseHeaders.set("Access-Control-Allow-Origin", "*");
+    responseHeaders.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    responseHeaders.set("Cache-Control", "public, max-age=2592000, stale-while-revalidate=86400"); // লম্বা ক্যাশিং
+
+    return new Response(response.body, {
+      status: response.status,
+      headers: responseHeaders,
+    });
+  } catch (error) {
+    return new Response(error.message, { status: 500 });
+  }
 }
