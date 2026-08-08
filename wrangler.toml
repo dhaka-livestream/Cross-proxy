@@ -2,7 +2,7 @@
 name = "proxy"
 
 # মূল ফাইল (যে ফাইলে এই কোডটি আছে)
-main = "worker.js"
+main = "m3u8proxy(cf_worker).js"
 
 # সামঞ্জস্যপূর্ণ তারিখ (সর্বশেষ একটি দিন)
 compatibility_date = "2024-12-18"
